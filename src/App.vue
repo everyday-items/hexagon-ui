@@ -5,7 +5,7 @@ import { useMetrics } from '@/composables/useMetrics'
 import { EVENT_CONFIG, type Event, type EventType } from '@/types/event'
 
 // SSE 连接
-const { events, status, paused, streamContent, togglePause, clear } = useSSE()
+const { events, status, paused, streamContent, togglePause, clear, getRunId } = useSSE()
 
 // 指标
 const { metrics, formatUptime } = useMetrics()
@@ -20,6 +20,22 @@ const eventFilter = ref<EventType | ''>('')
 const filteredEvents = computed(() => {
   if (!eventFilter.value) return events.value
   return events.value.filter(e => e.type === eventFilter.value)
+})
+
+// 显示的事件列表（确保选中事件始终可见）
+const displayEvents = computed(() => {
+  const list = filteredEvents.value.slice(0, 100)
+  // 如果选中事件不在前100条中，添加到末尾
+  if (selectedEvent.value) {
+    const selectedInList = list.some(e => e.id === selectedEvent.value?.id)
+    if (!selectedInList) {
+      const selectedInFiltered = filteredEvents.value.find(e => e.id === selectedEvent.value?.id)
+      if (selectedInFiltered) {
+        list.push(selectedInFiltered)
+      }
+    }
+  }
+  return list
 })
 
 // 连接状态文本
@@ -38,31 +54,46 @@ function getEventConfig(type: EventType) {
   return EVENT_CONFIG[type] || { icon: '📌', label: type, category: 'unknown' }
 }
 
+// 安全获取字符串值
+function safeString(value: unknown, maxLen?: number): string {
+  if (value === null || value === undefined) return ''
+  const str = typeof value === 'string' ? value : String(value)
+  return maxLen ? str.substring(0, maxLen) : str
+}
+
 // 获取事件标题
 function getEventTitle(event: Event): string {
   const data = event.data || {}
 
   switch (event.type) {
     case 'agent.start':
-      return `Agent: ${data.input || data.run_id || 'unknown'}`
+      return `Agent: ${safeString(data.input || data.run_id, 50) || 'unknown'}`
     case 'agent.end':
-      return `完成 (${data.duration_ms}ms)`
+      return `完成 (${safeString(data.duration_ms)}ms)`
     case 'llm.request':
-      return `${data.model || 'LLM'}: 请求中...`
+      return `${safeString(data.model) || 'LLM'}: 请求中...`
     case 'llm.stream':
-      return (data.content as string)?.substring(0, 50) || '...'
+      return safeString(data.content, 50) || '...'
     case 'llm.response':
-      return `${data.model}: ${data.total_tokens} tokens`
+      return `${safeString(data.model)}: ${safeString(data.total_tokens)} tokens`
     case 'tool.call':
-      return `调用: ${data.tool_name}`
+      return `调用: ${safeString(data.tool_name)}`
     case 'tool.result':
-      return `${data.tool_name}: ${data.error ? '失败' : '成功'}`
+      return `${safeString(data.tool_name)}: ${data.error ? '失败' : '成功'}`
     case 'retriever.start':
-      return `检索: ${(data.query as string)?.substring(0, 30)}...`
+      return `检索: ${safeString(data.query, 30)}...`
     case 'retriever.end':
-      return `找到 ${data.doc_count} 个文档`
+      return `找到 ${safeString(data.doc_count)} 个文档`
+    case 'graph.start':
+      return `图开始: ${safeString(data.graph_name || data.graph_id, 30)}`
+    case 'graph.node':
+      return `节点: ${safeString(data.node_name || data.node_id, 30)}`
+    case 'graph.end':
+      return `图结束 (${safeString(data.duration_ms)}ms)`
+    case 'state.change':
+      return `状态: ${safeString(data.key || data.state_key, 30)}`
     case 'error':
-      return (data.message as string)?.substring(0, 50) || '错误'
+      return safeString(data.message, 50) || '错误'
     default:
       return event.type
   }
@@ -97,12 +128,18 @@ function selectEvent(event: Event) {
   selectedEvent.value = event
 }
 
+// 检查事件数据是否有内容
+function hasEventData(event: Event): boolean {
+  if (!event.data) return false
+  return Object.keys(event.data).length > 0
+}
+
 // 获取流式内容
 function getStreamContent(event: Event): string {
   if (!['llm.request', 'llm.stream', 'llm.response'].includes(event.type)) {
     return ''
   }
-  const runId = (event.data?.run_id as string) || event.id
+  const runId = getRunId(event)
   return streamContent.value[runId] || ''
 }
 </script>
@@ -150,16 +187,20 @@ function getStreamContent(event: Event): string {
             <option value="tool.result">工具结果</option>
             <option value="retriever.start">检索开始</option>
             <option value="retriever.end">检索结束</option>
+            <option value="graph.start">图开始</option>
+            <option value="graph.node">图节点</option>
+            <option value="graph.end">图结束</option>
+            <option value="state.change">状态变更</option>
             <option value="error">错误</option>
           </select>
         </div>
         <div class="event-list">
-          <div v-if="filteredEvents.length === 0" class="empty-state">
+          <div v-if="displayEvents.length === 0" class="empty-state">
             <span class="empty-icon">📭</span>
             <p>等待事件...</p>
           </div>
           <div
-            v-for="event in filteredEvents.slice(0, 100)"
+            v-for="event in displayEvents"
             :key="event.id"
             :class="['event-item', { selected: selectedEvent?.id === event.id }]"
             @click="selectEvent(event)"
@@ -219,7 +260,7 @@ function getStreamContent(event: Event): string {
             </div>
 
             <!-- 事件数据 -->
-            <div v-if="Object.keys(selectedEvent.data).length > 0" class="detail-section">
+            <div v-if="hasEventData(selectedEvent)" class="detail-section">
               <div class="detail-section-title">事件数据</div>
               <pre class="detail-content">{{ formatJSON(selectedEvent.data) }}</pre>
             </div>
