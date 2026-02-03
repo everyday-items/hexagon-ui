@@ -26,13 +26,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
-    // 生成较小的文件
-    minify: 'terser',
-    terserOptions: {
-      compress: {
-        drop_console: true,
-        drop_debugger: true
-      }
-    }
+    // 使用 esbuild 压缩（Vite 5 默认，无需额外安装）
+    minify: 'esbuild'
   }
 })

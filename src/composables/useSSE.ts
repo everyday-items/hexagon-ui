@@ -3,6 +3,20 @@ import type { Event, EventType } from '@/types/event'
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'paused'
 
+// 流式内容最大保留条目数
+const MAX_STREAM_ENTRIES = 100
+
+// 事件类型验证
+function isValidEvent(obj: unknown): obj is Omit<Event, 'type'> {
+  if (typeof obj !== 'object' || obj === null) return false
+  const e = obj as Record<string, unknown>
+  return (
+    typeof e.id === 'string' &&
+    typeof e.timestamp === 'string' &&
+    (e.data === undefined || typeof e.data === 'object')
+  )
+}
+
 export function useSSE() {
   const events = ref<Event[]>([])
   const status = ref<ConnectionStatus>('connecting')
@@ -11,11 +25,22 @@ export function useSSE() {
 
   let eventSource: EventSource | null = null
   let reconnectTimer: number | null = null
+  const handlers = new Map<string, EventListener>()
+
+  // 事件类型列表
+  const eventTypes: EventType[] = [
+    'agent.start', 'agent.end',
+    'llm.request', 'llm.stream', 'llm.response',
+    'tool.call', 'tool.result',
+    'retriever.start', 'retriever.end',
+    'graph.start', 'graph.node', 'graph.end',
+    'state.change', 'error'
+  ]
 
   // 连接 SSE
   function connect() {
     if (eventSource) {
-      eventSource.close()
+      cleanup()
     }
 
     const protocol = window.location.protocol
@@ -42,26 +67,21 @@ export function useSSE() {
       scheduleReconnect()
     }
 
-    // 监听所有事件类型
-    const eventTypes: EventType[] = [
-      'agent.start', 'agent.end',
-      'llm.request', 'llm.stream', 'llm.response',
-      'tool.call', 'tool.result',
-      'retriever.start', 'retriever.end',
-      'graph.start', 'graph.node', 'graph.end',
-      'state.change', 'error'
-    ]
-
+    // 监听所有事件类型，保存引用以便清理
     eventTypes.forEach(type => {
-      eventSource!.addEventListener(type, (e: MessageEvent) => {
+      const handler = (e: MessageEvent) => {
         handleEvent(type, e.data)
-      })
+      }
+      handlers.set(type, handler as EventListener)
+      eventSource!.addEventListener(type, handler)
     })
 
     // 连接成功事件
-    eventSource.addEventListener('connected', (e: MessageEvent) => {
+    const connectedHandler = (e: MessageEvent) => {
       console.log('Connected:', e.data)
-    })
+    }
+    handlers.set('connected', connectedHandler as EventListener)
+    eventSource.addEventListener('connected', connectedHandler)
   }
 
   // 处理事件
@@ -69,16 +89,39 @@ export function useSSE() {
     if (paused.value) return
 
     try {
-      const event: Event = JSON.parse(data)
-      event.type = type
+      const parsed = JSON.parse(data)
+
+      // 验证事件结构
+      if (!isValidEvent(parsed)) {
+        console.error('Invalid event structure:', parsed)
+        return
+      }
+
+      const event: Event = {
+        ...parsed,
+        type,
+        data: parsed.data || {}
+      }
 
       // 处理 LLM 流式事件
       if (type === 'llm.stream') {
-        const runId = (event.data?.run_id as string) || event.id
+        const runId = getRunId(event)
+
+        // 限制 streamContent 条目数，防止内存泄漏
+        const keys = Object.keys(streamContent.value)
+        if (keys.length >= MAX_STREAM_ENTRIES && !streamContent.value[runId]) {
+          // 删除最旧的条目
+          delete streamContent.value[keys[0]]
+        }
+
         if (!streamContent.value[runId]) {
           streamContent.value[runId] = ''
         }
-        streamContent.value[runId] += (event.data?.content as string) || ''
+
+        const content = event.data?.content
+        if (typeof content === 'string') {
+          streamContent.value[runId] += content
+        }
       }
 
       // 添加事件
@@ -91,6 +134,18 @@ export function useSSE() {
     } catch (err) {
       console.error('Failed to parse event:', err, data)
     }
+  }
+
+  // 获取运行 ID，确保始终有值
+  function getRunId(event: Event): string {
+    const runId = event.data?.run_id
+    if (typeof runId === 'string' && runId) {
+      return runId
+    }
+    if (event.id) {
+      return event.id
+    }
+    return `fallback-${Date.now()}-${Math.random().toString(36).slice(2)}`
   }
 
   // 重连
@@ -122,12 +177,22 @@ export function useSSE() {
     streamContent.value = {}
   }
 
-  // 断开连接
-  function disconnect() {
+  // 清理监听器
+  function cleanup() {
     if (eventSource) {
+      // 移除所有监听器
+      handlers.forEach((handler, type) => {
+        eventSource?.removeEventListener(type, handler)
+      })
+      handlers.clear()
       eventSource.close()
       eventSource = null
     }
+  }
+
+  // 断开连接
+  function disconnect() {
+    cleanup()
     if (reconnectTimer) {
       clearTimeout(reconnectTimer)
       reconnectTimer = null
@@ -150,7 +215,6 @@ export function useSSE() {
     streamContent,
     togglePause,
     clear,
-    connect,
-    disconnect
+    getRunId
   }
 }

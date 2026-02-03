@@ -30,6 +30,8 @@ dist-ssr
 
 # TypeScript
 *.tsbuildinfo
+vite.config.js
+vite.config.d.ts
 
 # Testing
 coverage
