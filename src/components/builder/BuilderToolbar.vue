@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed } from 'vue'
 import { useGraphStore } from '@/composables/useGraphStore'
 import { useBuilderApi } from '@/composables/useBuilderApi'
 import type { ValidationResult, ExecutionResult } from '@/types/builder'
@@ -10,36 +10,39 @@ const emit = defineEmits<{
   (e: 'validationResult', result: ValidationResult): void
 }>()
 
-const { currentGraph, isDirty, syncToDefinition, syncFromDefinition, newGraph } = useGraphStore()
+const { currentGraph, isDirty, syncToDefinition, syncFromDefinition, setGraphName, newGraph } = useGraphStore()
 const { createGraph, updateGraph, validateGraph, executeGraph, loading } = useBuilderApi()
 
-const graphName = ref('')
+const graphName = computed({
+  get: () => currentGraph.value?.name ?? '',
+  set: (name: string) => setGraphName(name),
+})
 
 // 新建图
 function handleNew() {
   const name = graphName.value.trim() || '新建图'
   newGraph(name)
-  graphName.value = name
 }
 
 // 保存图
 async function handleSave() {
   const def = syncToDefinition()
-  if (!def.name) def.name = graphName.value || '未命名图'
+  if (!def.name) {
+    setGraphName('未命名图')
+    def.name = '未命名图'
+  }
 
   if (currentGraph.value?.id) {
     // 更新
     const updated = await updateGraph(currentGraph.value.id, def)
     if (updated) {
       syncFromDefinition(updated)
-      graphName.value = updated.name
     }
   } else {
     // 创建
     const created = await createGraph(def)
     if (created) {
       syncFromDefinition(created)
-      graphName.value = created.name
     }
   }
 }
@@ -106,7 +109,6 @@ function handleImport() {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         })
-        graphName.value = def.name || '导入的图'
       }
     } catch {
       // 静默处理

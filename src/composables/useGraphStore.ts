@@ -49,6 +49,15 @@ export function useGraphStore() {
     }
   }
 
+  // Graph metadata must have the same source of truth as the canvas state.
+  // Replacing the definition keeps Vue reactivity explicit and prevents the
+  // toolbar from maintaining a second, stale name after a graph is loaded.
+  function setGraphName(name: string) {
+    if (!currentGraph.value || currentGraph.value.name === name) return
+    currentGraph.value = { ...currentGraph.value, name }
+    isDirty.value = true
+  }
+
   // 添加节点
   function addNode(type: NodeType, name: string, position: { x: number; y: number }, config?: Record<string, unknown>) {
     const node: GraphNodeDef = {
@@ -165,6 +174,7 @@ export function useGraphStore() {
     isDirty,
     syncFromDefinition,
     syncToDefinition,
+    setGraphName,
     addNode,
     removeNode,
     updateNodePosition,
