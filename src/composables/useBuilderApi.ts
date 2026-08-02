@@ -1,22 +1,12 @@
 import { ref } from 'vue'
 import type { GraphDefinition, NodeTypeInfo, ValidationResult, ExecutionResult } from '@/types/builder'
-import type { ApiResponse } from '@/types/event'
+import { createDevUIRequester } from '@/api/devui-auth'
 
 // API 基础路径
 const API_BASE = '/api/builder'
 
-// 通用请求函数
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const resp = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  })
-  const data: ApiResponse<T> = await resp.json()
-  if (!data.success) {
-    throw new Error(data.error || '请求失败')
-  }
-  return data.data as T
-}
+// 单一同源安全会话：写操作先 bootstrap CSRF/session，过期时只重试一次。
+const request = createDevUIRequester()
 
 // Builder API 封装
 export function useBuilderApi() {
